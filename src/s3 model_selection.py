@@ -1,344 +1,264 @@
 """
-Hyperparameter selection for the BNN-GAM workflow.
+Validation-based BNN hyperparameter selection.
 
-Only the training and validation sets are used in this module.
+The test set must remain untouched until final independent evaluation.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from itertools import product
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
 
-from .bnn_model import train_bnn, predict_bnn
-
-
-@dataclass
-class SearchRecord:
-    """Results from one hyperparameter trial."""
-
-    trial_id: int
-    configuration: Dict[str, Any]
-    validation_rmse: Optional[float] = None
-    validation_mae: Optional[float] = None
-    validation_r2: Optional[float] = None
-    coverage_95: Optional[float] = None
-    selection_score: Optional[float] = None
-    status: str = "completed"
-    error: Optional[str] = None
+from .bnn_model import (
+    PredictionResult,
+    TrainingResult,
+    predict_bnn,
+    train_bnn,
+)
 
 
 @dataclass
 class SelectionResult:
-    """Output of the validation-based model selection procedure."""
+    """Best BNN configuration and the complete validation search record."""
 
-    best_configuration: Dict[str, Any]
+    best_configuration: dict[str, Any]
     best_score: float
-    best_training_result: Any
-    best_prediction_result: Any
-    history: List[SearchRecord] = field(default_factory=list)
-
-    def history_dataframe(self) -> pd.DataFrame:
-        """Return the search history as a table."""
-        return pd.DataFrame(
-            [
-                {
-                    "trial_id": record.trial_id,
-                    **record.configuration,
-                    "validation_rmse": record.validation_rmse,
-                    "validation_mae": record.validation_mae,
-                    "validation_r2": record.validation_r2,
-                    "coverage_95": record.coverage_95,
-                    "selection_score": record.selection_score,
-                    "status": record.status,
-                    "error": record.error,
-                }
-                for record in self.history
-            ]
-        )
+    best_training_result: TrainingResult
+    best_validation_prediction: PredictionResult
+    search_results: pd.DataFrame
 
 
-def default_search_space() -> Dict[str, List[Any]]:
-    """
-    Return a compact default search space.
-
-    The values can be modified according to computational resources.
-    `num_samples` is intentionally excluded because it is an evaluation
-    setting rather than a model-training hyperparameter.
-    """
+def default_search_space() -> dict[str, list[Any]]:
+    """Hyperparameter ranges described in the manuscript."""
     return {
-        "hidden_sizes": [(100, 50, 25)],
+        "hidden_sizes": [
+            (100, 50, 25),
+            (150, 75, 35),
+            (200, 100, 50),
+        ],
         "sigma_range": [
             (0.001, 0.05),
             (0.01, 0.10),
             (0.05, 0.20),
         ],
-        "learning_rate": [0.001, 0.003],
+        "learning_rate": [0.001, 0.003, 0.01],
+        "dropout_rate": [0.10, 0.20, 0.30],
+        "patience": [150, 200, 250],
         "batch_size": [64, 128],
-        "patience": [100],
-        "dropout_rate": [0.10, 0.20],
     }
 
 
-def expand_search_space(
-    search_space: Dict[str, List[Any]],
-) -> List[Dict[str, Any]]:
-    """Expand a dictionary-based search space into configurations."""
-    keys = list(search_space.keys())
-    values = [search_space[key] for key in keys]
-
+def _expand_search_space(
+    search_space: dict[str, list[Any]],
+) -> list[dict[str, Any]]:
+    keys = list(search_space)
     return [
-        dict(zip(keys, combination))
-        for combination in product(*values)
+        dict(zip(keys, values))
+        for values in product(*(search_space[key] for key in keys))
     ]
 
 
-def _as_float(value: Any) -> Optional[float]:
-    """Convert scalar-like values to Python floats."""
-    if value is None:
-        return None
+def _lower_is_better_score(values: pd.Series) -> pd.Series:
+    """Convert RMSE or MAE into a 0-1 score where larger is better."""
+    value_range = values.max() - values.min()
 
-    try:
-        value = float(value)
-    except (TypeError, ValueError):
-        return None
+    if np.isclose(value_range, 0.0):
+        return pd.Series(1.0, index=values.index)
 
-    if not np.isfinite(value):
-        return None
-
-    return value
+    return 1.0 - (values - values.min()) / value_range
 
 
-def _get_metric(metrics: Any, *names: str) -> Optional[float]:
-    """Read a metric from either a dictionary or an object."""
-    if metrics is None:
-        return None
-
-    if isinstance(metrics, dict):
-        for name in names:
-            if name in metrics:
-                return _as_float(metrics[name])
-
-    for name in names:
-        if hasattr(metrics, name):
-            return _as_float(getattr(metrics, name))
-
-    return None
-
-
-def _extract_metrics(prediction_result: Any) -> Dict[str, Optional[float]]:
-    """Extract validation metrics from PredictionResult."""
-    metrics = getattr(prediction_result, "metrics", prediction_result)
-
-    return {
-        "rmse": _get_metric(metrics, "rmse", "RMSE", "root_mean_squared_error"),
-        "mae": _get_metric(metrics, "mae", "MAE", "mean_absolute_error"),
-        "r2": _get_metric(metrics, "r2", "R2", "r_squared"),
-        "coverage_95": _get_metric(
-            metrics,
-            "coverage_95",
-            "coverage",
-            "interval_coverage",
-        ),
-    }
-
-
-def calculate_validation_score(
-    metrics: Dict[str, Optional[float]],
+def _calculate_composite_scores(
+    results: pd.DataFrame,
     target_coverage: float = 0.95,
-    coverage_weight: float = 0.30,
-) -> float:
-    """
-    Calculate a validation-only model selection score.
+) -> pd.DataFrame:
+    """Calculate Sa, Su, So, and Sc from validation-only metrics."""
+    results = results.copy()
 
-    The score rewards:
-    - lower validation RMSE;
-    - higher validation R2;
-    - 95% prediction-interval coverage close to the nominal level.
-
-    The score is used only for ranking candidate models. It must not be
-    calculated using the test set.
-    """
-    rmse = metrics.get("rmse")
-    r2 = metrics.get("r2")
-    coverage = metrics.get("coverage_95")
-
-    if rmse is None or r2 is None:
-        raise ValueError(
-            "Validation RMSE and R2 are required for model selection."
-        )
-
-    # Bounded accuracy component.
-    r2_component = np.clip((r2 + 1.0) / 2.0, 0.0, 1.0)
-
-    # Smaller RMSE receives a larger score.
-    rmse_component = 1.0 / (1.0 + max(rmse, 0.0))
-
-    accuracy_component = (
-        0.50 * r2_component
-        + 0.50 * rmse_component
+    results["rmse_score"] = _lower_is_better_score(
+        results["validation_rmse"]
+    )
+    results["mae_score"] = _lower_is_better_score(
+        results["validation_mae"]
     )
 
-    if coverage is None:
-        coverage_component = 0.0
-    else:
-        coverage_component = max(
-            0.0,
-            1.0 - abs(coverage - target_coverage) / target_coverage,
-        )
+    results["accuracy_score"] = (
+        results["validation_r2"]
+        + results["rmse_score"]
+        + results["mae_score"]
+    ) / 3.0
 
-    score = (
-        (1.0 - coverage_weight) * accuracy_component
-        + coverage_weight * coverage_component
+    results["uncertainty_score"] = (
+        1.0 - (results["validation_coverage_95"] - target_coverage).abs()
     )
 
-    return float(score)
+    results["generalization_score"] = (
+        1.0 - (results["training_r2"] - results["validation_r2"]).abs()
+    )
+
+    results["composite_score"] = (
+        0.50 * results["accuracy_score"]
+        + 0.30 * results["uncertainty_score"]
+        + 0.20 * results["generalization_score"]
+    )
+
+    return results
 
 
-def select_model(
+def select_bnn_model(
     X_train: np.ndarray,
     y_train: np.ndarray,
     X_validation: np.ndarray,
     y_validation: np.ndarray,
-    search_space: Optional[Dict[str, List[Any]]] = None,
+    y_scaler: Any,
+    search_space: Optional[dict[str, list[Any]]] = None,
     num_samples: int = 500,
-    target_coverage: float = 0.95,
-    coverage_weight: float = 0.30,
+    max_epochs: int = 3000,
     random_seed: int = 42,
-    continue_on_error: bool = True,
-    **fixed_training_kwargs: Any,
+    verbose: bool = True,
 ) -> SelectionResult:
     """
     Select BNN hyperparameters using training and validation data only.
 
-    Parameters
-    ----------
-    X_train, y_train:
-        Training data.
-
-    X_validation, y_validation:
-        Validation data used for hyperparameter selection.
-
-    search_space:
-        Dictionary containing candidate values for each hyperparameter.
-
-    num_samples:
-        Number of posterior predictive samples used for validation metrics.
-
-    target_coverage:
-        Nominal prediction interval coverage, normally 0.95.
-
-    coverage_weight:
-        Weight assigned to interval calibration.
-
-    random_seed:
-        Base random seed. A different deterministic seed is used per trial.
-
-    continue_on_error:
-        If True, failed trials are recorded and the search continues.
-
-    fixed_training_kwargs:
-        Additional fixed arguments passed to `train_bnn`.
-
-    Returns
-    -------
-    SelectionResult
-        Best configuration, best training result, best validation prediction,
-        and the complete search history.
+    `num_samples` controls posterior prediction precision and is not treated
+    as a model hyperparameter.
     """
     if search_space is None:
         search_space = default_search_space()
 
-    configurations = expand_search_space(search_space)
+    configurations = _expand_search_space(search_space)
 
     if not configurations:
-        raise ValueError("The search space contains no configurations.")
+        raise ValueError("The search space is empty.")
 
-    history: List[SearchRecord] = []
-    best_score = -np.inf
-    best_configuration = None
-    best_training_result = None
-    best_prediction_result = None
+    records = []
 
     for trial_id, configuration in enumerate(configurations, start=1):
-        record = SearchRecord(
-            trial_id=trial_id,
-            configuration=configuration.copy(),
-        )
+        trial_seed = random_seed + trial_id - 1
 
-        try:
-            trial_seed = random_seed + trial_id - 1
-
-            training_kwargs = {
-                **configuration,
-                **fixed_training_kwargs,
-                "random_seed": trial_seed,
-            }
-
-            # The test set is deliberately absent from this call.
-            training_result = train_bnn(
-                X_train,
-                y_train,
-                X_validation,
-                y_validation,
-                **training_kwargs,
+        if verbose:
+            print(
+                f"Trial {trial_id}/{len(configurations)}: "
+                f"{configuration}"
             )
 
-            prediction_result = predict_bnn(
-                training_result,
-                X_validation,
-                y_validation,
+        try:
+            trained_model = train_bnn(
+                X_train=X_train,
+                y_train=y_train,
+                X_validation=X_validation,
+                y_validation=y_validation,
+                max_epochs=max_epochs,
+                random_seed=trial_seed,
+                verbose=False,
+                **configuration,
+            )
+
+            training_prediction = predict_bnn(
+                training_result=trained_model,
+                X_data=X_train,
+                y_scaler=y_scaler,
+                y_data=y_train,
                 num_samples=num_samples,
                 random_seed=trial_seed,
             )
 
-            metrics = _extract_metrics(prediction_result)
-
-            record.validation_rmse = metrics["rmse"]
-            record.validation_mae = metrics["mae"]
-            record.validation_r2 = metrics["r2"]
-            record.coverage_95 = metrics["coverage_95"]
-
-            record.selection_score = calculate_validation_score(
-                metrics=metrics,
-                target_coverage=target_coverage,
-                coverage_weight=coverage_weight,
+            validation_prediction = predict_bnn(
+                training_result=trained_model,
+                X_data=X_validation,
+                y_scaler=y_scaler,
+                y_data=y_validation,
+                num_samples=num_samples,
+                random_seed=trial_seed + 1,
             )
 
-            if record.selection_score > best_score:
-                best_score = record.selection_score
-                best_configuration = configuration.copy()
-                best_training_result = training_result
-                best_prediction_result = prediction_result
+            train_metrics = training_prediction.metrics
+            validation_metrics = validation_prediction.metrics
 
-        except Exception as exc:
-            record.status = "failed"
-            record.error = f"{type(exc).__name__}: {exc}"
+            records.append(
+                {
+                    "trial_id": trial_id,
+                    "trial_seed": trial_seed,
+                    **configuration,
+                    "training_r2": train_metrics["r2"],
+                    "validation_r2": validation_metrics["r2"],
+                    "validation_rmse": validation_metrics["rmse"],
+                    "validation_mae": validation_metrics["mae"],
+                    "validation_coverage_95": validation_metrics[
+                        "coverage_95"
+                    ],
+                    "best_validation_loss": trained_model.best_validation_loss,
+                    "epochs_trained": trained_model.epochs_trained,
+                    "status": "completed",
+                    "error": None,
+                }
+            )
 
-            if not continue_on_error:
-                raise
+        except Exception as error:
+            records.append(
+                {
+                    "trial_id": trial_id,
+                    "trial_seed": trial_seed,
+                    **configuration,
+                    "status": "failed",
+                    "error": f"{type(error).__name__}: {error}",
+                }
+            )
 
-        history.append(record)
+            if verbose:
+                print(f"Trial {trial_id} failed: {error}")
 
-    if best_configuration is None:
-        error_messages = [
-            record.error
-            for record in history
-            if record.error is not None
-        ]
+    all_results = pd.DataFrame(records)
+    successful_results = all_results.loc[
+        all_results["status"] == "completed"
+    ].copy()
 
-        raise RuntimeError(
-            "All hyperparameter trials failed. "
-            + " | ".join(error_messages)
-        )
+    if successful_results.empty:
+        raise RuntimeError("All hyperparameter trials failed.")
+
+    successful_results = _calculate_composite_scores(successful_results)
+    successful_results = successful_results.sort_values(
+        "composite_score",
+        ascending=False,
+    ).reset_index(drop=True)
+
+    best_row = successful_results.iloc[0]
+
+    parameter_names = list(search_space)
+    best_configuration = {
+        parameter: best_row[parameter]
+        for parameter in parameter_names
+    }
+
+    # Retrain the selected configuration once to return a clean best model.
+    best_training_result = train_bnn(
+        X_train=X_train,
+        y_train=y_train,
+        X_validation=X_validation,
+        y_validation=y_validation,
+        max_epochs=max_epochs,
+        random_seed=int(best_row["trial_seed"]),
+        verbose=False,
+        **best_configuration,
+    )
+
+    best_validation_prediction = predict_bnn(
+        training_result=best_training_result,
+        X_data=X_validation,
+        y_scaler=y_scaler,
+        y_data=y_validation,
+        num_samples=num_samples,
+        random_seed=int(best_row["trial_seed"]) + 1,
+    )
 
     return SelectionResult(
         best_configuration=best_configuration,
-        best_score=float(best_score),
+        best_score=float(best_row["composite_score"]),
         best_training_result=best_training_result,
-        best_prediction_result=best_prediction_result,
-        history=history,
+        best_validation_prediction=best_validation_prediction,
+        search_results=successful_results,
     )
