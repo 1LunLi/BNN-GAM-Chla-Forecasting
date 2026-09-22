@@ -1,0 +1,27 @@
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Generated model outputs
+outputs/
+
+# Saved model artifacts
+*.pt
+*.pth
+*.pkl
+*.joblib
+
+# Temporary files
+*.log
+*.tmp
+.ipynb_checkpoints/
+
+# System and editor files
+.DS_Store
+Thumbs.db
+.vscode/
