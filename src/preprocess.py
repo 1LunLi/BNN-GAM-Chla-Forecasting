@@ -103,7 +103,9 @@ def create_lagged_dataset(
     if lagged_time < 1:
         raise ValueError("lagged_time must be at least 1.")
 
-    required_columns = [date_column, target_column, *feature_columns]
+    required_columns = list(
+    dict.fromkeys([date_column, target_column, *feature_columns])
+)
     missing_columns = [
         column
         for column in required_columns

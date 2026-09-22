@@ -1,8 +1,4 @@
-"""
-Validation-based BNN hyperparameter selection.
-
-The test set must remain untouched until final independent evaluation.
-"""
+"""Validation-based BNN hyperparameter selection."""
 
 from __future__ import annotations
 
@@ -23,8 +19,6 @@ from .bnn_model import (
 
 @dataclass
 class SelectionResult:
-    """Best BNN configuration and the complete validation search record."""
-
     best_configuration: dict[str, Any]
     best_score: float
     best_training_result: TrainingResult
@@ -33,7 +27,6 @@ class SelectionResult:
 
 
 def default_search_space() -> dict[str, list[Any]]:
-    """Hyperparameter ranges described in the manuscript."""
     return {
         "hidden_sizes": [
             (100, 50, 25),
@@ -56,33 +49,32 @@ def _expand_search_space(
     search_space: dict[str, list[Any]],
 ) -> list[dict[str, Any]]:
     keys = list(search_space)
+
     return [
         dict(zip(keys, values))
         for values in product(*(search_space[key] for key in keys))
     ]
 
 
-def _lower_is_better_score(values: pd.Series) -> pd.Series:
-    """Convert RMSE or MAE into a 0-1 score where larger is better."""
+def _inverse_minmax_score(values: pd.Series) -> pd.Series:
     value_range = values.max() - values.min()
 
     if np.isclose(value_range, 0.0):
         return pd.Series(1.0, index=values.index)
 
-    return 1.0 - (values - values.min()) / value_range
+    return (values.max() - values) / value_range
 
 
-def _calculate_composite_scores(
+def _score_results(
     results: pd.DataFrame,
     target_coverage: float = 0.95,
 ) -> pd.DataFrame:
-    """Calculate Sa, Su, So, and Sc from validation-only metrics."""
     results = results.copy()
 
-    results["rmse_score"] = _lower_is_better_score(
+    results["rmse_score"] = _inverse_minmax_score(
         results["validation_rmse"]
     )
-    results["mae_score"] = _lower_is_better_score(
+    results["mae_score"] = _inverse_minmax_score(
         results["validation_mae"]
     )
 
@@ -106,7 +98,10 @@ def _calculate_composite_scores(
         + 0.20 * results["generalization_score"]
     )
 
-    return results
+    return results.sort_values(
+        "composite_score",
+        ascending=False,
+    ).reset_index(drop=True)
 
 
 def select_bnn_model(
@@ -124,8 +119,7 @@ def select_bnn_model(
     """
     Select BNN hyperparameters using training and validation data only.
 
-    `num_samples` controls posterior prediction precision and is not treated
-    as a model hyperparameter.
+    The test set must not be passed to this function.
     """
     if search_space is None:
         search_space = default_search_space()
@@ -136,9 +130,11 @@ def select_bnn_model(
         raise ValueError("The search space is empty.")
 
     records = []
+    trial_configurations = {}
 
     for trial_id, configuration in enumerate(configurations, start=1):
         trial_seed = random_seed + trial_id - 1
+        trial_configurations[trial_id] = configuration.copy()
 
         if verbose:
             print(
@@ -158,7 +154,7 @@ def select_bnn_model(
                 **configuration,
             )
 
-            training_prediction = predict_bnn(
+            train_prediction = predict_bnn(
                 training_result=trained_model,
                 X_data=X_train,
                 y_scaler=y_scaler,
@@ -176,7 +172,7 @@ def select_bnn_model(
                 random_seed=trial_seed + 1,
             )
 
-            train_metrics = training_prediction.metrics
+            train_metrics = train_prediction.metrics
             validation_metrics = validation_prediction.metrics
 
             records.append(
@@ -220,28 +216,20 @@ def select_bnn_model(
     if successful_results.empty:
         raise RuntimeError("All hyperparameter trials failed.")
 
-    successful_results = _calculate_composite_scores(successful_results)
-    successful_results = successful_results.sort_values(
-        "composite_score",
-        ascending=False,
-    ).reset_index(drop=True)
+    search_results = _score_results(successful_results)
+    best_row = search_results.iloc[0]
 
-    best_row = successful_results.iloc[0]
+    best_trial_id = int(best_row["trial_id"])
+    best_seed = int(best_row["trial_seed"])
+    best_configuration = trial_configurations[best_trial_id]
 
-    parameter_names = list(search_space)
-    best_configuration = {
-        parameter: best_row[parameter]
-        for parameter in parameter_names
-    }
-
-    # Retrain the selected configuration once to return a clean best model.
     best_training_result = train_bnn(
         X_train=X_train,
         y_train=y_train,
         X_validation=X_validation,
         y_validation=y_validation,
         max_epochs=max_epochs,
-        random_seed=int(best_row["trial_seed"]),
+        random_seed=best_seed,
         verbose=False,
         **best_configuration,
     )
@@ -252,7 +240,7 @@ def select_bnn_model(
         y_scaler=y_scaler,
         y_data=y_validation,
         num_samples=num_samples,
-        random_seed=int(best_row["trial_seed"]) + 1,
+        random_seed=best_seed + 1,
     )
 
     return SelectionResult(
@@ -260,5 +248,5 @@ def select_bnn_model(
         best_score=float(best_row["composite_score"]),
         best_training_result=best_training_result,
         best_validation_prediction=best_validation_prediction,
-        search_results=successful_results,
+        search_results=search_results,
     )
