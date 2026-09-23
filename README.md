@@ -38,7 +38,7 @@ BNN-GAM-Chla-Forecasting/
     ├── bnn_model.py
     ├── model_selection.py
     └── gam_attribution.py
-
+```
 
 ## Input data format
 
@@ -53,8 +53,9 @@ PAR_ratio, Q, H, CVQ7, V, h, FR, HR7, tau_b
 
 ## Installation
 
-```bash
 Python 3.10 or later is recommended.
+
+```bash
 git clone https://github.com/1LunLi/BNN-GAM-Chla-Forecasting.git
 cd BNN-GAM-Chla-Forecasting
 python -m pip install --upgrade pip
@@ -69,7 +70,8 @@ From the repository root, run:
 python -m examples.run_demo
 ```
 
-The demonstration reads the synthetic daily dataset in data/sample_daily_data.xlsx and writes the results to outputs/.
+The demonstration reads the synthetic daily dataset in data/sample\_daily\_data.xlsx and writes the results to outputs/.
+
 Typical outputs include:
 
 ```text
@@ -77,6 +79,7 @@ outputs/
 ├── search_results_AT1_LT7.csv
 └── test_predictions_AT1_LT7.csv
 ```
+
 The prediction file contains forecast origins, target dates, observed values, predictive means, predictive standard deviations, 95% predictive intervals, and the probability that chlorophyll-a exceeds the demonstration threshold.
 
 To conduct the complete hyperparameter search, replace `DEMO_SEARCH_SPACE` in `examples/run_demo.py` with the full search space defined in `src/model_selection.py`.
@@ -88,25 +91,30 @@ The GAM example uses the synthetic F1L7 worksheet in:
 ```text
 data/sample_gam_input.xlsx
 ```
+
 Run:
+
 ```bash
 python -m examples.run_gam_demo
 ```
 
 The GAM results are written to:
+
 ```text
 outputs/gam_demo/
 ├── gam_AT1LT7.png
 └── gam_curves_AT1LT7.csv
 ```
 
-The figure shows the fitted GAM response, sample points, and 95% confidence intervals for six environmental variables (sin(month), TP, T, PAR, tau_b, HR7).
-For the demonstration, Chla_t is the synthetic BNN-predicted chlorophyll-a response.
+The figure shows the fitted GAM response, sample points, and 95% confidence intervals for six environmental variables (sin(month), TP, T, PAR, tau\_b, HR7).
+
+For the demonstration, Chla\_t is the synthetic BNN-predicted chlorophyll-a response.
 
 The GAM transformation rules are:
-- Chla_t: log10-transformed response.
-- TP_avg, PAR_avg, and tau_b_avg: log10-transformed predictors.
-- sin(month)_avg, T_avg, and HR7_avg: used without logarithmic transformation.
+
+- Chla\_t: log10-transformed response.
+- TP\_avg, PAR\_avg, and tau\_b\_avg: log10-transformed predictors.
+- sin(month)\_avg, T\_avg, and HR7\_avg: used without logarithmic transformation.
 
 ## Reproducibility notes
 
@@ -121,10 +129,13 @@ The repository includes a synthetic dataset with the same daily input format sol
 Public meteorological and radiation data sources are described in the manuscript and its Supplementary Material.
 
 ## Output files
+
 Runtime outputs are written to outputs/. This directory is excluded by .gitignore and should not be committed to the repository.
+
 Because the public examples use synthetic data, the resulting prediction metrics and GAM curves are intended only for software verification.
 
 ## Citation
+
 If this repository is used, please cite the associated manuscript and acknowledge the repository version used for the analysis.
 
 ## License
