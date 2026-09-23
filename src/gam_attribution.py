@@ -50,7 +50,7 @@ FACTORS = [
             "tau_b_avg",
             "bed_shear_stress_avg",
             "τ_avg",
-            "��_avg",
+            "tau_b_avg",
         ),
         "log10": True,
         "label": r"$\log_{10}(\tau_b)$ (N/m$^2$)",
