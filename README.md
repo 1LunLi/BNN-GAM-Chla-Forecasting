@@ -39,6 +39,7 @@ BNN-GAM-Chla-Forecasting/
     ├── model_selection.py
     └── gam_attribution.py
 
+
 ## Input data format
 
 The workflow uses a daily dataset with one row per date. The sample dataset contains the following columns:
