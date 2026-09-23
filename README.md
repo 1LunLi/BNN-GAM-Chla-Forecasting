@@ -1,19 +1,43 @@
 # BNN-GAM-Chla-Forecasting
 
-Reference implementation of the Bayesian Neural Network (BNN) forecasting component described in the manuscript, *A probabilistic and interpretable Bayesian Neural Network framework for chlorophyll-a forecasting in highly regulated rivers*.
+Reference implementation of a Bayesian Neural Network (BNN) coupled with a Generalized Additive Model (GAM) for probabilistic chlorophyll-a forecasting and nonlinear attribution in regulated rivers.
 
 ## Scope
 
-This repository provides a leakage-safe workflow for probabilistic chlorophyll-a forecasting in regulated rivers. It includes:
+This repository provides a compact, reproducible demonstration of the modelling workflow described in the associated manuscript:
 
-- Chronological data splitting and training-set-only standardization
-- Automatic lagged-feature construction using ahead time (AT) and lagged time (LT)
-- Bayesian Neural Network training with Pyro and stochastic variational inference
-- Posterior predictive sampling and 95% prediction intervals
-- Exceedance probabilities for user-defined Chl-a alert thresholds
-- Validation-based hyperparameter selection using accuracy, uncertainty, and generalization scores
+1. Time-ordered data preprocessing and lagged-feature construction.
+2. Training-set-only feature standardization.
+3. Bayesian neural network training and probabilistic prediction.
+4. Hyperparameter/model selection using validation data.
+5. Predictive uncertainty quantification.
+6. 95% predictive intervals and exceedance probabilities.
+7. GAM-based nonlinear attribution of the BNN-predicted chlorophyll-a response.
 
-The current repository provides the BNN forecasting component. GAM-based nonlinear attribution is not included in this release.
+The public examples demonstrate the `AT=1, LT=7` setting, where the model uses the previous 7 days of information to forecast chlorophyll-a one day ahead.
+
+## Repository Structure
+
+```text
+BNN-GAM-Chla-Forecasting/
+├── README.md
+├── LICENSE
+├── requirements.txt
+├── .gitignore
+├── data/
+│   ├── README.md
+│   ├── sample_daily_data.xlsx
+│   └── sample_gam_input.xlsx
+├── examples/
+│   ├── __init__.py
+│   ├── run_demo.py
+│   └── run_gam_demo.py
+└── src/
+    ├── __init__.py
+    ├── preprocess.py
+    ├── bnn_model.py
+    ├── model_selection.py
+    └── gam_attribution.py
 
 ## Input data format
 
@@ -29,8 +53,10 @@ PAR_ratio, Q, H, CVQ7, V, h, FR, HR7, tau_b
 ## Installation
 
 ```bash
+Python 3.10 or later is recommended.
 git clone https://github.com/1LunLi/BNN-GAM-Chla-Forecasting.git
 cd BNN-GAM-Chla-Forecasting
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
@@ -42,14 +68,44 @@ From the repository root, run:
 python -m examples.run_demo
 ```
 
-The demonstration uses synthetic daily data and a compact one-configuration search. Outputs are saved in:
+The demonstration reads the synthetic daily dataset in data/sample_daily_data.xlsx and writes the results to outputs/.
+Typical outputs include:
 
 ```text
-outputs/search_results_AT1_LT7.csv
-outputs/test_predictions_AT1_LT7.csv
+outputs/
+├── search_results_AT1_LT7.csv
+└── test_predictions_AT1_LT7.csv
 ```
+The prediction file contains forecast origins, target dates, observed values, predictive means, predictive standard deviations, 95% predictive intervals, and the probability that chlorophyll-a exceeds the demonstration threshold.
 
 To conduct the complete hyperparameter search, replace `DEMO_SEARCH_SPACE` in `examples/run_demo.py` with the full search space defined in `src/model_selection.py`.
+
+## Run the GAM Demonstration
+
+The GAM example uses the synthetic F1L7 worksheet in:
+
+```text
+data/sample_gam_input.xlsx
+```
+Run:
+```bash
+python -m examples.run_gam_demo
+```
+
+The GAM results are written to:
+```text
+outputs/gam_demo/
+├── gam_AT1LT7.png
+└── gam_curves_AT1LT7.csv
+```
+
+The figure shows the fitted GAM response, sample points, and 95% confidence intervals for six environmental variables (sin(month), TP, T, PAR, tau_b, HR7).
+For the demonstration, Chla_t is the synthetic BNN-predicted chlorophyll-a response.
+
+The GAM transformation rules are:
+- Chla_t: log10-transformed response.
+- TP_avg, PAR_avg, and tau_b_avg: log10-transformed predictors.
+- sin(month)_avg, T_avg, and HR7_avg: used without logarithmic transformation.
 
 ## Reproducibility notes
 
@@ -62,6 +118,13 @@ The original in-situ chlorophyll-a and water-quality monitoring data are subject
 The repository includes a synthetic dataset with the same daily input format solely to demonstrate the execution of the workflow. It does not contain original monitoring records, and it cannot reproduce the numerical results reported in the manuscript.
 
 Public meteorological and radiation data sources are described in the manuscript and its Supplementary Material.
+
+## Output files
+Runtime outputs are written to outputs/. This directory is excluded by .gitignore and should not be committed to the repository.
+Because the public examples use synthetic data, the resulting prediction metrics and GAM curves are intended only for software verification.
+
+## Citation
+If this repository is used, please cite the associated manuscript and acknowledge the repository version used for the analysis.
 
 ## License
 
