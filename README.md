@@ -6,10 +6,10 @@ Reference implementation of a Bayesian Neural Network (BNN) coupled with a Gener
 
 This repository provides a compact, reproducible demonstration of the modelling workflow described in the associated manuscript:
 
-1. Time-ordered data preprocessing and lagged-feature construction.
-2. Training-set-only feature standardization.
+1. Data preprocessing and lagged-feature construction.
+2. Feature standardization.
 3. Bayesian neural network training and probabilistic prediction.
-4. Hyperparameter/model selection using validation data.
+4. Hyperparameter and model selection using validation data.
 5. Predictive uncertainty quantification.
 6. 95% predictive intervals and exceedance probabilities.
 7. GAM-based nonlinear attribution of the BNN-predicted chlorophyll-a response.
